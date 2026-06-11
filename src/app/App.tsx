@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { OpenAI } from "openai";
 import { motion } from "motion/react";
 import { ArrowRight, ChevronDown, Mail, Sparkles, X } from "lucide-react";
 import characterImage from "../imports/4038.png";
@@ -164,9 +165,113 @@ export default function App() {
   const [activeRailApp, setActiveRailApp] = useState<RailApp>(null);
   const [chatbotInput, setChatbotInput] = useState("");
   const [chatbotReply, setChatbotReply] = useState("FAXX BOT: choose a signal and I will decode your route.");
+  const [chatHistory, setChatHistory] = useState([{role: "assistant", content: "FAXX BOT: choose a signal and I will decode your route.", reasoning: ""}]);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [dreamEntry, setDreamEntry] = useState("");
   const [dreamStamps, setDreamStamps] = useState<string[]>(["pink bullet train", "cat conductor"]);
   const [settingsEnabled, setSettingsEnabled] = useState(() => settingsFeatures.map((feature) => feature.enabled));
+
+  const handleSendMessage = async (message: string) => {
+    if (!message) return;
+    setChatbotInput("");
+    setIsStreaming(true);
+
+    setChatHistory(prev => [...prev, { role: "user", content: message, reasoning: "" }]);
+
+    // Create new assistant message
+    setChatHistory(prev => [...prev, { role: "assistant", content: "", reasoning: "" }]);
+
+    try {
+      const client = new OpenAI({
+        baseURL: "https://integrate.api.nvidia.com/v1",
+        apiKey: import.meta.env.VITE_GLM_API_KEY,
+        dangerouslyAllowBrowser: true
+      });
+
+      const completion = await client.chat.completions.create({
+        model: "z-ai/glm-5.1",
+        messages: [{ role: "user", content: message }],
+        temperature: 1,
+        top_p: 1,
+        max_tokens: 16384,
+        extra_body: { chat_template_kwargs: { enable_thinking: true, clear_thinking: false } },
+        stream: true,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "describe_harry_potter_character",
+              description: "Returns information and images of Harry Potter characters.",
+              parameters: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    enum: ["Harry James Potter", "Hermione Jean Granger", "Ron Weasley", "Fred Weasley", "George Weasley", "Bill Weasley", "Percy Weasley", "Charlie Weasley", "Ginny Weasley", "Molly Weasley", "Arthur Weasley", "Neville Longbottom", "Luna Lovegood", "Draco Malfoy", "Albus Percival Wulfric Brian Dumbledore", "Minerva McGonagall", "Remus Lupin", "Rubeus Hagrid", "Sirius Black", "Severus Snape", "Bellatrix Lestrange", "Lord Voldemort", "Cedric Diggory", "Nymphadora Tonks", "James Potter"],
+                    description: "Name of the Harry Potter character"
+                  }
+                },
+                required: ["name"]
+              }
+            }
+          },
+          {
+            type: "function",
+            function: {
+              name: "name_a_color",
+              description: "A tool that returns a bunch of color names for a given color_hex.",
+              parameters: {
+                type: "object",
+                properties: {
+                  color_hex: {
+                    type: "string",
+                    description: "A hexadecimal color value which must be represented as a string."
+                  }
+                },
+                required: ["color_hex"]
+              }
+            }
+          }
+        ],
+        tool_choice: "auto"
+      });
+
+      for await (const chunk of completion) {
+        if (!chunk.choices || chunk.choices.length === 0 || !chunk.choices[0].delta) continue;
+
+        const delta = chunk.choices[0].delta;
+
+        setChatHistory(prev => {
+          const newHistory = [...prev];
+          const lastIndex = newHistory.length - 1;
+          const lastMsg = { ...newHistory[lastIndex] };
+
+          if (delta.reasoning_content) {
+            lastMsg.reasoning = (lastMsg.reasoning || "") + delta.reasoning_content;
+          }
+          if (delta.content !== null && delta.content !== undefined) {
+            lastMsg.content = (lastMsg.content || "") + delta.content;
+          }
+          if (delta.tool_calls) {
+            lastMsg.tool_calls = delta.tool_calls;
+          }
+
+          newHistory[lastIndex] = lastMsg;
+          return newHistory;
+        });
+      }
+    } catch (error) {
+      console.error("Chatbot error:", error);
+      setChatHistory(prev => {
+        const newHistory = [...prev];
+        const lastIndex = newHistory.length - 1;
+        newHistory[lastIndex].content = "Error communicating with Neural Rail.";
+        return newHistory;
+      });
+    } finally {
+      setIsStreaming(false);
+    }
+  };
 
   function enterFaxxImperial() {
     if (faxxTransitioning || faxxEntered) {
@@ -411,15 +516,56 @@ export default function App() {
                       </button>
                     ))}
                   </div>
-                ) : activeRailApp === "chatbot" ? (
+                                ) : activeRailApp === "chatbot" ? (
                   <div className="grid max-h-[70vh] gap-3 overflow-hidden lg:grid-cols-[11rem_1fr_13rem]">
                     <aside className="space-y-2 overflow-y-auto border-2 border-[#1f2465] bg-[#eef1ff] p-2 font-['Pixelify_Sans'] text-[0.62rem] font-black uppercase">
                       {["History", "Image Gen", "Video Gen", "Deep Research", "PROCODES", "Gallery", "Voice", "Files", "Agents", "Settings"].map((tool) => <button key={tool} type="button" onClick={() => setChatbotReply(`FAXX ${tool}: module armed inside Invincible OS.`)} className="block w-full border-2 border-[#1f2465] bg-white px-2 py-2 text-left shadow-[2px_2px_0_#1f2465] hover:bg-[#fff8bf]">{tool}</button>)}
                     </aside>
                     <main className="flex min-h-[28rem] flex-col border-2 border-[#1f2465] bg-[#0f1649] p-3 text-[#c8fff6] shadow-[inset_4px_4px_0_rgba(0,0,0,0.28)]">
                       <div className="mb-3 font-['Archivo_Black'] text-2xl uppercase text-[#fff8bf]">PRON33R Neural Rail</div>
-                      <div className="flex-1 space-y-2 overflow-y-auto text-left font-['Pixelify_Sans'] text-sm font-bold"><div className="border-2 border-[#7fcfff] bg-[#17236c] p-3">{chatbotReply}</div><div className="border-2 border-[#ff67c8] bg-[#24185d] p-3">Ask for image gen, video gen, deep research, PROCODES, or gallery sorting.</div></div>
-                      <div className="mt-3 flex gap-2"><input value={chatbotInput} onChange={(event) => setChatbotInput(event.target.value)} placeholder="message Invincible OS..." className="min-w-0 flex-1 border-2 border-[#7fcfff] bg-white px-3 py-2 font-['Pixelify_Sans'] text-sm font-bold text-[#1f2465] outline-none" /><button type="button" onClick={() => { const cleanSignal = chatbotInput.trim() || "build me a universe"; setChatbotReply(`INVINCIBLE CHAT: ${cleanSignal.toUpperCase()} queued. PROCODES and research engines are glowing.`); setChatbotInput(""); }} className="border-2 border-[#7fcfff] bg-[#ff67c8] px-3 py-2 font-['Pixelify_Sans'] text-xs font-black uppercase text-white shadow-[3px_3px_0_#000]">send</button></div>
+                      <div className="flex-1 space-y-2 overflow-y-auto text-left font-['Pixelify_Sans'] text-sm font-bold">
+                        {chatHistory.map((msg, idx) => (
+                          <div key={idx} className={`border-2 p-3 ${msg.role === 'user' ? 'border-[#ff67c8] bg-[#24185d]' : 'border-[#7fcfff] bg-[#17236c]'}`}>
+                            {msg.role === 'assistant' && msg.reasoning && (
+                              <div className="mb-2 text-gray-400 border-b border-gray-600 pb-2">
+                                <span className="text-xs uppercase block mb-1 text-[#fff8bf]">Reasoning:</span>
+                                {msg.reasoning}
+                              </div>
+                            )}
+                            <div>{msg.content}</div>
+                            {msg.tool_calls && (
+                              <div className="mt-2 text-xs text-[#b7ff5a]">
+                                [Tool Call: {msg.tool_calls[0].function.name}]
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <input
+                          value={chatbotInput}
+                          onChange={(event) => setChatbotInput(event.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !isStreaming) {
+                              const cleanSignal = chatbotInput.trim() || "build me a universe";
+                              handleSendMessage(cleanSignal);
+                            }
+                          }}
+                          placeholder="message Invincible OS..."
+                          className="min-w-0 flex-1 border-2 border-[#7fcfff] bg-white px-3 py-2 font-['Pixelify_Sans'] text-sm font-bold text-[#1f2465] outline-none disabled:opacity-50"
+                          disabled={isStreaming}
+                        />
+                        <button
+                          type="button"
+                          disabled={isStreaming}
+                          onClick={() => {
+                            const cleanSignal = chatbotInput.trim() || "build me a universe";
+                            handleSendMessage(cleanSignal);
+                          }}
+                          className="border-2 border-[#7fcfff] bg-[#ff67c8] px-3 py-2 font-['Pixelify_Sans'] text-xs font-black uppercase text-white shadow-[3px_3px_0_#000] disabled:opacity-50 disabled:cursor-not-allowed">
+                            send
+                        </button>
+                      </div>
                     </main>
                     <aside className="border-2 border-[#1f2465] bg-[#ffe9fb] p-2"><div className="mb-2 font-['Archivo_Black'] uppercase">Gallery</div><div className="grid grid-cols-2 gap-2">{["Photo", "Render", "Video", "Meme", "Dream", "Code"].map((item, index) => <button key={item} type="button" className="aspect-square border-2 border-[#1f2465] bg-white font-['Pixelify_Sans'] text-[0.6rem] font-black shadow-[2px_2px_0_#1f2465]" style={{ backgroundColor: ["#fff8bf", "#7fcfff", "#ffdcf4"][index % 3] }}>{item}<br />+</button>)}</div><button type="button" onClick={() => setChatbotReply("Gallery: photo upload slot simulated. Drop your images into imports and I will frame them.")} className="mt-3 w-full border-2 border-[#1f2465] bg-[#b7ff5a] px-2 py-2 font-['Pixelify_Sans'] text-xs font-black uppercase shadow-[2px_2px_0_#1f2465]">add photos</button></aside>
                   </div>
